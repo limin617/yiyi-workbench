@@ -584,13 +584,30 @@ body {
   box-shadow: 0 1px 4px rgba(240,140,158,0.06);
   border: 1px solid #fef0f3;
 }
-.memo-bullet {
-  width: 6px;
-  height: 6px;
-  min-width: 6px;
-  background: var(--primary);
+.todo-check {
+  width: 22px;
+  height: 22px;
+  min-width: 22px;
   border-radius: 50%;
-  margin-top: 8px;
+  border: 2px solid #e8c4d0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+  margin-top: 2px;
+  cursor: pointer;
+  transition: all 0.15s;
+  -webkit-tap-highlight-color: transparent;
+}
+.todo-check.checked {
+  background: var(--primary);
+  border-color: var(--primary);
+}
+.todo-done .memo-text {
+  text-decoration: line-through;
+  color: #c4a8b4;
 }
 .memo-text {
   flex: 1;
@@ -1774,6 +1791,11 @@ if (appData.daily.date !== todayKey) {
   appData.daily.date = todayKey;
 }
 
+// 清理待办事项：已完成(done=true)且日期不是今天的自动删除
+appData.todo = appData.todo.filter(function(t) {
+  return !t.done || t.date === todayKey;
+});
+
 // Reset monthly if month changed
 var monthKey = getMonthKey();
 if (appData.monthly.date !== monthKey) {
@@ -1975,8 +1997,9 @@ function renderTodo() {
     var html = '';
     for (var i = 0; i < appData.todo.length; i++) {
       var item = appData.todo[i];
-      html += '<div class="memo-item">' +
-        '<span class="memo-bullet"></span>' +
+      var doneClass = item.done ? 'todo-done' : '';
+      html += '<div class="memo-item ' + doneClass + '">' +
+        '<span class="todo-check ' + (item.done ? 'checked' : '') + '" onclick="toggleTodoCheck(\'' + item.id + '\')">' + (item.done ? '✓' : '') + '</span>' +
         '<textarea class="memo-text" placeholder="输入待办内容..." oninput="updateTodoText(\'' + item.id + '\', this.value)" onblur="saveData(appData)">' + escHtml(item.text) + '</textarea>' +
         '<span class="memo-del" onclick="deleteTodoItem(\'' + item.id + '\')">✕</span>' +
         '</div>';
@@ -1985,11 +2008,28 @@ function renderTodo() {
   }
 }
 function addTodoItem() {
-  appData.todo.push({ id: 'todo' + Date.now(), text: '' });
+  var today = getDateKey();
+  appData.todo.push({ id: 'todo' + Date.now(), text: '', done: false, date: today });
   saveData(appData); renderTodo();
   setTimeout(function() { var areas = document.querySelectorAll('#todoList .memo-text'); if (areas.length) areas[areas.length - 1].focus(); }, 100);
 }
-function updateTodoText(id, value) { var item = appData.todo.find(function(t) { return t.id === id; }); if (item) item.text = value; }
+var todoSaveTimer = null;
+function updateTodoText(id, value) {
+  var item = appData.todo.find(function(t) { return t.id === id; });
+  if (item) {
+    item.text = value;
+    if (todoSaveTimer) clearTimeout(todoSaveTimer);
+    todoSaveTimer = setTimeout(function() { saveData(appData); }, 300);
+  }
+}
+function toggleTodoCheck(id) {
+  var item = appData.todo.find(function(t) { return t.id === id; });
+  if (item) {
+    item.done = !item.done;
+    if (item.done) item.date = getDateKey();
+    saveData(appData); renderTodo();
+  }
+}
 function deleteTodoItem(id) {
   if (!confirm('确定删除此待办？')) return;
   appData.todo = appData.todo.filter(function(t) { return t.id !== id; });
