@@ -1712,8 +1712,8 @@ function getDefaultData() {
     },
     reviews: [],
     currentReview: {
-      leftImage: null,
-      rightImage: null,
+      leftImageId: null,
+      rightImageId: null,
       notes: '',
     },
   };
@@ -1809,6 +1809,38 @@ if (!appData.benchmarks) {
 });
 
 saveData(appData);
+
+// 迁移复盘旧数据：把 base64 图片转为 IndexedDB
+(function() {
+  var cr = appData.currentReview || {};
+  var hasOld = false;
+  // 迁移 currentReview
+  if (cr.leftImage && typeof cr.leftImage === 'string' && cr.leftImage.indexOf('data:') === 0) {
+    if (!cr.leftImageId) { cr.leftImageId = 'rev_current_left'; saveImageToDB(cr.leftImageId, cr.leftImage); }
+    cr.leftImage = undefined;
+    hasOld = true;
+  }
+  if (cr.rightImage && typeof cr.rightImage === 'string' && cr.rightImage.indexOf('data:') === 0) {
+    if (!cr.rightImageId) { cr.rightImageId = 'rev_current_right'; saveImageToDB(cr.rightImageId, cr.rightImage); }
+    cr.rightImage = undefined;
+    hasOld = true;
+  }
+  // 迁移 reviews 历史
+  for (var i = 0; i < (appData.reviews || []).length; i++) {
+    var r = appData.reviews[i];
+    if (r.leftImage && typeof r.leftImage === 'string' && r.leftImage.indexOf('data:') === 0) {
+      if (!r.leftImageId) { r.leftImageId = 'rev_' + r.id + '_left'; saveImageToDB(r.leftImageId, r.leftImage); }
+      r.leftImage = undefined;
+      hasOld = true;
+    }
+    if (r.rightImage && typeof r.rightImage === 'string' && r.rightImage.indexOf('data:') === 0) {
+      if (!r.rightImageId) { r.rightImageId = 'rev_' + r.id + '_right'; saveImageToDB(r.rightImageId, r.rightImage); }
+      r.rightImage = undefined;
+      hasOld = true;
+    }
+  }
+  if (hasOld) saveData(appData);
+})();
 
 // ==================== NAVIGATION ====================
 document.getElementById('navSidebar').addEventListener('click', function(e) {
@@ -2483,21 +2515,30 @@ function deleteBenchmark(cat, id) {
 // ==================== REVIEW PAGE ====================
 function renderReview() {
   var cr = appData.currentReview;
-  if (cr.leftImage) {
-    document.getElementById('leftPreview').src = cr.leftImage;
-    document.getElementById('leftPreview').style.display = 'block';
-    document.getElementById('leftPlaceholder').style.display = 'none';
-    document.getElementById('compareLeft').classList.add('has-image');
+  // 从 IndexedDB 加载 currentReview 图片
+  if (cr.leftImageId) {
+    loadImageFromDB(cr.leftImageId, function(b64) {
+      if (b64) {
+        document.getElementById('leftPreview').src = b64;
+        document.getElementById('leftPreview').style.display = 'block';
+        document.getElementById('leftPlaceholder').style.display = 'none';
+        document.getElementById('compareLeft').classList.add('has-image');
+      }
+    });
   } else {
     document.getElementById('leftPreview').style.display = 'none';
     document.getElementById('leftPlaceholder').style.display = '';
     document.getElementById('compareLeft').classList.remove('has-image');
   }
-  if (cr.rightImage) {
-    document.getElementById('rightPreview').src = cr.rightImage;
-    document.getElementById('rightPreview').style.display = 'block';
-    document.getElementById('rightPlaceholder').style.display = 'none';
-    document.getElementById('compareRight').classList.add('has-image');
+  if (cr.rightImageId) {
+    loadImageFromDB(cr.rightImageId, function(b64) {
+      if (b64) {
+        document.getElementById('rightPreview').src = b64;
+        document.getElementById('rightPreview').style.display = 'block';
+        document.getElementById('rightPlaceholder').style.display = 'none';
+        document.getElementById('compareRight').classList.add('has-image');
+      }
+    });
   } else {
     document.getElementById('rightPreview').style.display = 'none';
     document.getElementById('rightPlaceholder').style.display = '';
@@ -2513,18 +2554,44 @@ function renderReview() {
     var revHtml = '';
     var reversed = appData.reviews.slice().reverse();
     for (var i = 0; i < reversed.length; i++) {
-      var r = reversed[i];
-      revHtml += '<div class="review-history-item">' +
-        '<div class="review-history-date">📅 ' + formatDateTime(r.date) + '</div>' +
-        '<div class="review-history-images">' +
-          '<div class="review-history-img">' + (r.leftImage ? '<img src="' + r.leftImage + '">' : '<div style="height:100%;display:flex;align-items:center;justify-content:center;color:#d4bcc6;font-size:12px;">参考图</div>') + '</div>' +
-          '<div class="review-history-img">' + (r.rightImage ? '<img src="' + r.rightImage + '">' : '<div style="height:100%;display:flex;align-items:center;justify-content:center;color:#d4bcc6;font-size:12px;">成品图</div>') + '</div>' +
-        '</div>' +
-        '<div class="review-history-text">' + (escHtml(r.notes) || '（无文字记录）') + '</div>' +
-        '<button class="add-btn" style="margin-top:8px;font-size:11px;padding:6px;color:var(--danger);border-color:#ffcdd2;" onclick="deleteReview(\'' + r.id + '\')">🗑 删除此记录</button>' +
-      '</div>';
+      (function(r, idx) {
+        revHtml += '<div class="review-history-item" id="rev-item-' + r.id + '">' +
+          '<div class="review-history-date">📅 ' + formatDateTime(r.date) + '</div>' +
+          '<div class="review-history-images">' +
+            '<div class="review-history-img" id="rev-left-' + r.id + '">' +
+              (r.leftImageId
+                ? '<div style="height:100%;display:flex;align-items:center;justify-content:center;color:#d4bcc6;font-size:12px;">加载中...</div>'
+                : '<div style="height:100%;display:flex;align-items:center;justify-content:center;color:#d4bcc6;font-size:12px;">参考图</div>') +
+            '</div>' +
+            '<div class="review-history-img" id="rev-right-' + r.id + '">' +
+              (r.rightImageId
+                ? '<div style="height:100%;display:flex;align-items:center;justify-content:center;color:#d4bcc6;font-size:12px;">加载中...</div>'
+                : '<div style="height:100%;display:flex;align-items:center;justify-content:center;color:#d4bcc6;font-size:12px;">成品图</div>') +
+            '</div>' +
+          '</div>' +
+          '<div class="review-history-text">' + (escHtml(r.notes) || '（无文字记录）') + '</div>' +
+          '<button class="add-btn" style="margin-top:8px;font-size:11px;padding:6px;color:var(--danger);border-color:#ffcdd2;" onclick="deleteReview(\'' + r.id + '\')">🗑 删除此记录</button>' +
+        '</div>';
+      })(reversed[i], i);
     }
     historyContainer.innerHTML = revHtml;
+    // 异步加载历史记录图片
+    for (var j = 0; j < reversed.length; j++) {
+      (function(r) {
+        if (r.leftImageId) {
+          loadImageFromDB(r.leftImageId, function(b64) {
+            var el = document.getElementById('rev-left-' + r.id);
+            if (el && b64) el.innerHTML = '<img src="' + b64 + '" onclick="viewReviewImage(\'' + r.id + '\',\'left\')">';
+          });
+        }
+        if (r.rightImageId) {
+          loadImageFromDB(r.rightImageId, function(b64) {
+            var el = document.getElementById('rev-right-' + r.id);
+            if (el && b64) el.innerHTML = '<img src="' + b64 + '" onclick="viewReviewImage(\'' + r.id + '\',\'right\')">';
+          });
+        }
+      })(reversed[j]);
+    }
   }
 }
 
@@ -2536,31 +2603,86 @@ function handleImageUpload(event) {
   var slot = pendingImageSlot;
   var reader = new FileReader();
   reader.onload = function(e) {
-    if (slot === 'left') appData.currentReview.leftImage = e.target.result;
-    else appData.currentReview.rightImage = e.target.result;
-    saveData(appData); renderReview(); pendingImageSlot = null;
+    var b64 = e.target.result;
+    var imgId = 'rev_' + slot + '_' + Date.now();
+    saveImageToDB(imgId, b64).then(function(ok) {
+      if (ok) {
+        if (slot === 'left') {
+          // 清理旧图
+          if (appData.currentReview.leftImageId) deleteImageFromDB(appData.currentReview.leftImageId);
+          appData.currentReview.leftImageId = imgId;
+        } else {
+          if (appData.currentReview.rightImageId) deleteImageFromDB(appData.currentReview.rightImageId);
+          appData.currentReview.rightImageId = imgId;
+        }
+      }
+      saveData(appData); renderReview(); pendingImageSlot = null;
+    });
   };
   reader.onerror = function() { pendingImageSlot = null; };
   reader.readAsDataURL(file);
 }
 function clearCompareImage(slot) {
-  if (slot === 'left') appData.currentReview.leftImage = null;
-  else appData.currentReview.rightImage = null;
+  if (slot === 'left') {
+    if (appData.currentReview.leftImageId) { deleteImageFromDB(appData.currentReview.leftImageId); }
+    appData.currentReview.leftImageId = null;
+  } else {
+    if (appData.currentReview.rightImageId) { deleteImageFromDB(appData.currentReview.rightImageId); }
+    appData.currentReview.rightImageId = null;
+  }
   saveData(appData); renderReview();
 }
 function saveReview() {
   var notes = document.getElementById('reviewNotes').value.trim();
   var cr = appData.currentReview;
-  if (!cr.leftImage && !cr.rightImage && !notes) { showToast('⚠️ 请至少上传一张图片或填写复盘总结'); return; }
-  appData.reviews.push({ id: 'rev' + Date.now(), date: new Date().toISOString(), leftImage: cr.leftImage, rightImage: cr.rightImage, notes: notes });
-  appData.currentReview = { leftImage: null, rightImage: null, notes: '' };
+  if (!cr.leftImageId && !cr.rightImageId && !notes) { showToast('⚠️ 请至少上传一张图片或填写复盘总结'); return; }
+  appData.reviews.push({
+    id: 'rev' + Date.now(),
+    date: new Date().toISOString(),
+    leftImageId: cr.leftImageId,
+    rightImageId: cr.rightImageId,
+    notes: notes
+  });
+  appData.currentReview = { leftImageId: null, rightImageId: null, notes: '' };
   saveData(appData); renderReview();
   showToast('✅ 复盘记录已保存！');
 }
 function deleteReview(id) {
   if (!confirm('确定删除此复盘记录？')) return;
+  // 删除 IndexedDB 中的图片
+  var review = null;
+  for (var i = 0; i < appData.reviews.length; i++) {
+    if (appData.reviews[i].id === id) { review = appData.reviews[i]; break; }
+  }
+  if (review) {
+    if (review.leftImageId) deleteImageFromDB(review.leftImageId);
+    if (review.rightImageId) deleteImageFromDB(review.rightImageId);
+  }
   appData.reviews = appData.reviews.filter(function(r) { return r.id !== id; });
   saveData(appData); renderReview();
+}
+// 全屏查看复盘图片
+function viewReviewImage(revId, side) {
+  var review = null;
+  for (var i = 0; i < appData.reviews.length; i++) {
+    if (appData.reviews[i].id === revId) { review = appData.reviews[i]; break; }
+  }
+  if (!review) return;
+  var imgId = side === 'left' ? review.leftImageId : review.rightImageId;
+  if (!imgId) return;
+  loadImageFromDB(imgId, function(b64) {
+    if (!b64) return;
+    var overlay = document.getElementById('fullscreenOverlay');
+    if (!overlay) {
+      overlay = document.createElement('div');
+      overlay.id = 'fullscreenOverlay';
+      overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:#000;z-index:9999;display:flex;align-items:center;justify-content:center;';
+      overlay.onclick = function() { overlay.remove(); };
+      document.body.appendChild(overlay);
+    }
+    overlay.innerHTML = '<img src="' + b64 + '" style="max-width:100%;max-height:100%;object-fit:contain;">';
+    overlay.style.display = 'flex';
+  });
 }
 document.getElementById('reviewNotes').addEventListener('input', function() {
   appData.currentReview.notes = this.value;
